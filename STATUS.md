@@ -6,12 +6,15 @@
 - Service surface and initial primitive set drafted and reviewed ([ARCHITECTURE.md](./ARCHITECTURE.md)).
 - Crypto-agility + PQC-readiness stance set.
 - Threat model drafted and reviewed.
+- Phase 1 primitive set accepted ([RFC-0007](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0007-cryptographic-primitive-set.md);
+  see [ADR-0011](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0011-cryptographic-primitive-set.md)):
+  BLAKE3(+SHA-256)/XChaCha20-Poly1305(+AES-256-GCM)/HKDF+Argon2id/Ed25519/X25519/
+  hardware-seeded CSPRNG, with PQC-hybrid identifier slots reserved (ML-DSA, ML-KEM) but
+  not yet implemented.
 
 ## Next
-- [RFC-0007](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0007-cryptographic-primitive-set.md)
-  (Draft): ratify the Phase 1 primitive set — under review.
-- Specify the sealed-capability token format (with [`lantern-capabilities`](https://github.com/lantern-os/lantern-capabilities))
-  — blocked on RFC-0007 landing.
+- Specify the sealed-capability token format (with [`lantern-capabilities`](https://github.com/lantern-os/lantern-capabilities)),
+  against the primitives ADR-0011 fixed.
 - Phase 2: keystore + signing/AEAD operations behind capabilities.
 
 ## Blocked on
