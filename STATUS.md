@@ -8,8 +8,10 @@
 - Threat model drafted and reviewed.
 
 ## Next
-- RFC to ratify the primitive set (→ ADR).
-- Specify the sealed-capability token format (with [`lantern-capabilities`](https://github.com/lantern-os/lantern-capabilities)).
+- [RFC-0007](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0007-cryptographic-primitive-set.md)
+  (Draft): ratify the Phase 1 primitive set — under review.
+- Specify the sealed-capability token format (with [`lantern-capabilities`](https://github.com/lantern-os/lantern-capabilities))
+  — blocked on RFC-0007 landing.
 - Phase 2: keystore + signing/AEAD operations behind capabilities.
 
 ## Blocked on
