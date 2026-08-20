@@ -8,7 +8,7 @@ build on. Applications get *capabilities to operations*, never raw keys.
 - **Layer:** system service (confined user space; key custody ideally hardware-backed).
 - **System context:** [wiki/Cryptography](https://github.com/lantern-os/lantern-docs/blob/main/wiki/Cryptography.md).
 
-> ⚠️ **Phase 0.** Design only; no code. Primitive *choices* are RFC-governed. See [`STATUS.md`](./STATUS.md).
+> ⚠️ **Phase 2.** Keystore prototype in progress. Primitive *choices* are RFC-governed. See [`STATUS.md`](./STATUS.md).
 
 ## In this repo
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md), [`THREAT_MODEL.md`](./THREAT_MODEL.md), [`STATUS.md`](./STATUS.md).

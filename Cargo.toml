@@ -1,0 +1,21 @@
+[package]
+name = "lantern-crypto"
+version = "0.0.0"
+edition = "2021"
+description = "LanternOS crypto keystore — Phase 2 prototype (RFC-0007), capability-gated via lantern-capabilities"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "lantern_crypto"
+path = "src/lib.rs"
+
+[dependencies]
+lantern-hal = { git = "https://github.com/lantern-os/lantern-hal", branch = "main" }
+lantern-kernel = { git = "https://github.com/lantern-os/lantern-kernel", branch = "main" }
+lantern-capabilities = { git = "https://github.com/lantern-os/lantern-capabilities", branch = "main" }
+# Audited primitive implementations, per ADR-0011 and ARCHITECTURE.md's "prefer reviewed
+# crates over rolling our own" — no_std, no heap allocation required.
+chacha20poly1305 = { version = "0.10", default-features = false }
+ed25519-dalek = { version = "2", default-features = false, features = ["fast"] }
+zeroize = { version = "1", default-features = false, features = ["derive"] }
