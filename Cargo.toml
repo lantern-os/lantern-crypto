@@ -18,4 +18,9 @@ lantern-capabilities = { git = "https://github.com/lantern-os/lantern-capabiliti
 # crates over rolling our own" — no_std, no heap allocation required.
 chacha20poly1305 = { version = "0.10", default-features = false }
 ed25519-dalek = { version = "2", default-features = false, features = ["fast"] }
+blake3 = { version = "1", default-features = false }
 zeroize = { version = "1", default-features = false, features = ["derive"] }
+# Constant-time MAC comparison (X6, THREAT_MODEL.md) — already a transitive
+# dependency via chacha20poly1305/ed25519-dalek; depended on directly rather
+# than hand-rolling a constant-time compare.
+subtle = { version = "2", default-features = false }

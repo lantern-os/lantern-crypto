@@ -32,15 +32,32 @@
   release).
 - **Randomness is deliberately not sourced by this crate.** ADR-0011's "hardware-seeded CSPRNG"
   is a `lantern-hal` concern that doesn't exist yet (see "Blocked on", now narrowed to just
-  this). `Keystore::generate_aead_key`/`generate_signing_key` take caller-supplied random bytes
-  instead, so this crate's correctness doesn't depend on where that source ends up living.
+  this). `Keystore::generate_aead_key`/`generate_signing_key`/`generate_mac_key` take
+  caller-supplied random bytes instead, so this crate's correctness doesn't depend on where
+  that source ends up living.
+- **BLAKE3 hashing** (`src/hash.rs`, real `blake3` crate): [`hash`]/[`Hasher`] are plain,
+  unkeyed, ungated free functions (`hash`/`Hasher::update`/`finalize`) — content-addressing's
+  block-naming operation needs no capability, only whatever governs storing/retrieving the
+  block it names (the future `lantern-filesystem`'s job). `MacKey` is BLAKE3's native keyed
+  mode used as a MAC — RFC-0007 reserved exactly this rather than adding a separate
+  primitive ("a signature or keyed-hash/MAC scheme ... already exist in the ratified set"),
+  concretely for RFC-0003's still-unbuilt sealed-capability token format. Unlike a hash, a
+  MAC key *is* secret material, so it's a third `Keystore` key purpose
+  (`KeyPurpose::Mac`/`KeyOps::MAC`), gated the same as AEAD/signing — including
+  `Keystore::verify_mac`, which (unlike Ed25519 `verify`) needs the same badge/key access as
+  computing the MAC, since verification needs the shared secret, not a public half. MAC
+  verification is constant-time (`subtle::ConstantTimeEq`, not a hand-rolled compare) to
+  avoid the exact timing side channel X6 (`THREAT_MODEL.md`) exists to rule out. 6 more unit
+  tests for `hash` in isolation, 2 more `Keystore` integration tests
+  (mint→grant→mac→verify_mac, and confirming a MAC-only badge can't sign) — 21 total, same
+  clippy/target coverage as above.
 
 ## Next
 - Specify the sealed-capability token format (with [`lantern-capabilities`](https://github.com/lantern-os/lantern-capabilities)),
-  against the primitives ADR-0011 fixed.
-- BLAKE3 hashing/content-addressing and HKDF/Argon2id key derivation — ADR-0011 primitives
-  this first prototype didn't need yet (no consumer for CAS hashing or password-based
-  derivation until `lantern-filesystem` or a real key-backup flow exists).
+  against the primitives ADR-0011 fixed — `MacKey`/`Ed25519` signing are now both available as
+  building blocks for it.
+- HKDF/Argon2id key derivation — the one ADR-0011 primitive category this prototype still
+  doesn't need yet (no consumer until a real key-hierarchy/backup flow exists).
 - Wire a real hardware-seeded CSPRNG into key generation once `lantern-hal` has one, replacing
   today's caller-supplied-bytes placeholder.
 - Turning `Keystore` into deployable confined-service code needs `lantern-runtime`'s not-yet-built

@@ -4,26 +4,30 @@
 //! Phase 2's first prototype code in this crate
 //! ([RFC-0009](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0009-phase-1-to-phase-2-transition.md)/
 //! [ADR-0014](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0014-phase-1-complete-phase-2-opened.md)):
-//! a fixed-capacity [`Keystore`] holding AEAD ([`aead`]) and signing
-//! ([`signing`]) key material, gating every operation on a
-//! [`lantern_capabilities::Broker`]-issued badge — "no raw keys to apps, only
-//! operation capabilities" (`ARCHITECTURE.md`'s first principle, X1 in
-//! `THREAT_MODEL.md`).
+//! a fixed-capacity [`Keystore`] holding AEAD ([`aead`]), signing
+//! ([`signing`]), and BLAKE3-keyed-MAC ([`hash`]) key material, gating every
+//! operation on a [`lantern_capabilities::Broker`]-issued badge — "no raw
+//! keys to apps, only operation capabilities" (`ARCHITECTURE.md`'s first
+//! principle, X1 in `THREAT_MODEL.md`). [`hash`] also has BLAKE3's *unkeyed*
+//! hashing ([`hash::hash`]/[`hash::Hasher`]) as free functions — no secret
+//! material, so nothing to gate; see that module's doc for the content-
+//! addressing use RFC-0007 names for it.
 //!
 //! [`Keystore`] is the concrete object semantics
 //! `lantern-capabilities/src/lib.rs`'s own doc names as `Broker`'s job to stay
 //! out of: `Broker` mints and grants a badge over real IPC and tracks
 //! revocation; it knows nothing about what that badge is *for*. This crate
 //! adds the missing half — a badge here also names a specific [`KeyId`] and a
-//! specific [`KeyOps`] subset (encrypt vs. decrypt vs. sign), checked on every
+//! specific [`KeyOps`] subset (encrypt/decrypt/sign/mac), checked on every
 //! operation in [`Keystore::check_access`] before any key material is
 //! touched.
 //!
 //! **Randomness is deliberately out of scope here.** ADR-0011's "OS CSPRNG
 //! seeded from hardware entropy" is a `lantern-hal` concern that doesn't
 //! exist yet (`STATUS.md`'s "Blocked on"). [`Keystore::generate_aead_key`]/
-//! [`Keystore::generate_signing_key`] take caller-supplied random bytes
-//! rather than sourcing entropy themselves, so this crate stays correct and
+//! [`Keystore::generate_signing_key`]/[`Keystore::generate_mac_key`] take
+//! caller-supplied random bytes rather than sourcing entropy themselves, so
+//! this crate stays correct and
 //! entropy-source-agnostic regardless of where that source ends up living —
 //! real callers are expected to pass bytes from a real CSPRNG once one
 //! exists; today's tests pass fixed/counter-derived bytes, which is only
@@ -38,6 +42,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod aead;
+pub mod hash;
 pub mod signing;
 
 use lantern_capabilities::Broker;
@@ -57,6 +62,11 @@ pub struct KeyId(u16);
 pub enum KeyPurpose {
     Aead,
     Signing,
+    /// A BLAKE3 keyed-mode MAC key ([`crate::hash::MacKey`]) — unlike
+    /// [`crate::hash::hash`] itself (unkeyed, ungated, see that module's
+    /// doc), a MAC key is secret material and goes through the same
+    /// gating as every other key purpose here.
+    Mac,
 }
 
 /// The operations a granted badge may be scoped to — orthogonal to
@@ -72,6 +82,10 @@ impl KeyOps {
     pub const ENCRYPT: KeyOps = KeyOps(1 << 0);
     pub const DECRYPT: KeyOps = KeyOps(1 << 1);
     pub const SIGN: KeyOps = KeyOps(1 << 2);
+    /// Covers both computing *and* verifying a MAC — unlike
+    /// [`KeyOps::SIGN`]/verify, both directions need the same secret key
+    /// (see [`crate::hash`]'s doc), so there's no ungated-verify split here.
+    pub const MAC: KeyOps = KeyOps(1 << 3);
 
     pub const fn union(self, other: KeyOps) -> KeyOps {
         KeyOps(self.0 | other.0)
@@ -89,6 +103,7 @@ impl KeyOps {
         match purpose {
             KeyPurpose::Aead => self.is_subset_of(KeyOps::ENCRYPT.union(KeyOps::DECRYPT)),
             KeyPurpose::Signing => self.is_subset_of(KeyOps::SIGN),
+            KeyPurpose::Mac => self.is_subset_of(KeyOps::MAC),
         }
     }
 
@@ -130,6 +145,7 @@ pub enum KeystoreError {
 enum KeyMaterial {
     Aead(aead::AeadKey),
     Signing(signing::SigningKey),
+    Mac(hash::MacKey),
     /// [`Keystore::destroy`] leaves a tombstone here rather than freeing the
     /// slot: [`KeyId`]s are never reused (see [`Keystore::alloc_key_slot`]'s
     /// doc for why reuse would be a real bug, not just a wart), the same
@@ -201,6 +217,15 @@ impl Keystore {
         let id = self.alloc_key_slot()?;
         self.keys[id.0 as usize] =
             Some(KeyRecord { purpose: KeyPurpose::Signing, material: KeyMaterial::Signing(signing::SigningKey::from_random_bytes(random_seed)) });
+        Ok(id)
+    }
+
+    /// Generates and stores a new BLAKE3 keyed-mode MAC key — same
+    /// entropy-sourcing caveat as [`Keystore::generate_aead_key`].
+    pub fn generate_mac_key(&mut self, random_bytes: [u8; hash::MAC_KEY_LEN]) -> Result<KeyId, KeystoreError> {
+        let id = self.alloc_key_slot()?;
+        self.keys[id.0 as usize] =
+            Some(KeyRecord { purpose: KeyPurpose::Mac, material: KeyMaterial::Mac(hash::MacKey::from_random_bytes(random_bytes)) });
         Ok(id)
     }
 
@@ -309,7 +334,7 @@ impl Keystore {
         match &self.key_record(key)?.material {
             KeyMaterial::Aead(k) => k.encrypt_in_place_detached(nonce, aad, buffer).map_err(|_| KeystoreError::CryptoFailure),
             KeyMaterial::Destroyed => Err(KeystoreError::KeyDestroyed),
-            KeyMaterial::Signing(_) => Err(KeystoreError::WrongPurpose),
+            KeyMaterial::Signing(_) | KeyMaterial::Mac(_) => Err(KeystoreError::WrongPurpose),
         }
     }
 
@@ -328,7 +353,7 @@ impl Keystore {
         match &self.key_record(key)?.material {
             KeyMaterial::Aead(k) => k.decrypt_in_place_detached(nonce, aad, buffer, tag).map_err(|_| KeystoreError::CryptoFailure),
             KeyMaterial::Destroyed => Err(KeystoreError::KeyDestroyed),
-            KeyMaterial::Signing(_) => Err(KeystoreError::WrongPurpose),
+            KeyMaterial::Signing(_) | KeyMaterial::Mac(_) => Err(KeystoreError::WrongPurpose),
         }
     }
 
@@ -339,7 +364,32 @@ impl Keystore {
         match &self.key_record(key)?.material {
             KeyMaterial::Signing(k) => Ok(k.sign(message)),
             KeyMaterial::Destroyed => Err(KeystoreError::KeyDestroyed),
-            KeyMaterial::Aead(_) => Err(KeystoreError::WrongPurpose),
+            KeyMaterial::Aead(_) | KeyMaterial::Mac(_) => Err(KeystoreError::WrongPurpose),
+        }
+    }
+
+    /// Computes a BLAKE3 keyed-mode MAC over `message` under `key`, gated on
+    /// `badge` having been granted [`KeyOps::MAC`] for `key`.
+    pub fn mac(&self, badge: u64, key: KeyId, message: &[u8]) -> Result<hash::Hash, KeystoreError> {
+        self.check_access(badge, key, KeyOps::MAC)?;
+        match &self.key_record(key)?.material {
+            KeyMaterial::Mac(k) => Ok(k.compute(message)),
+            KeyMaterial::Destroyed => Err(KeystoreError::KeyDestroyed),
+            KeyMaterial::Aead(_) | KeyMaterial::Signing(_) => Err(KeystoreError::WrongPurpose),
+        }
+    }
+
+    /// Verifies a MAC against `key` in constant time
+    /// ([`crate::hash::MacKey::verify`]) — gated the same as
+    /// [`Keystore::mac`], unlike [`Keystore::verify`]'s public-key
+    /// operation: MAC verification needs the same secret the badge scopes
+    /// access to.
+    pub fn verify_mac(&self, badge: u64, key: KeyId, message: &[u8], mac: &hash::Hash) -> Result<(), KeystoreError> {
+        self.check_access(badge, key, KeyOps::MAC)?;
+        match &self.key_record(key)?.material {
+            KeyMaterial::Mac(k) => k.verify(message, mac).map_err(|_| KeystoreError::CryptoFailure),
+            KeyMaterial::Destroyed => Err(KeystoreError::KeyDestroyed),
+            KeyMaterial::Aead(_) | KeyMaterial::Signing(_) => Err(KeystoreError::WrongPurpose),
         }
     }
 
@@ -350,7 +400,7 @@ impl Keystore {
         match &self.key_record(key)?.material {
             KeyMaterial::Signing(k) => Ok(k.verifying_key()),
             KeyMaterial::Destroyed => Err(KeystoreError::KeyDestroyed),
-            KeyMaterial::Aead(_) => Err(KeystoreError::WrongPurpose),
+            KeyMaterial::Aead(_) | KeyMaterial::Mac(_) => Err(KeystoreError::WrongPurpose),
         }
     }
 
@@ -455,6 +505,27 @@ mod tests {
         let sig = f.keystore.sign(badge, key, b"a message").unwrap();
         // Verification needs no badge at all (public-key operation, X1).
         f.keystore.verify(key, b"a message", &sig).unwrap();
+    }
+
+    #[test]
+    fn granted_badge_can_mac_and_verify() {
+        let mut f = setup();
+        let key = f.keystore.generate_mac_key([4u8; hash::MAC_KEY_LEN]).unwrap();
+        let badge = grant_access(&mut f, key, KeyOps::MAC);
+
+        let mac = f.keystore.mac(badge, key, b"a message").unwrap();
+        // Unlike signature verification, MAC verification needs the same
+        // secret key, so it's gated exactly like computing the MAC.
+        f.keystore.verify_mac(badge, key, b"a message", &mac).unwrap();
+        assert!(f.keystore.verify_mac(badge, key, b"a different message", &mac).is_err());
+    }
+
+    #[test]
+    fn mac_key_cannot_sign() {
+        let mut f = setup();
+        let key = f.keystore.generate_mac_key([4u8; hash::MAC_KEY_LEN]).unwrap();
+        let badge = grant_access(&mut f, key, KeyOps::MAC);
+        assert_eq!(f.keystore.sign(badge, key, b"a message"), Err(KeystoreError::OpNotGranted));
     }
 
     #[test]
