@@ -53,9 +53,13 @@
   clippy/target coverage as above.
 
 ## Next
-- Specify the sealed-capability token format (with [`lantern-capabilities`](https://github.com/lantern-os/lantern-capabilities)),
-  against the primitives ADR-0011 fixed — `MacKey`/`Ed25519` signing are now both available as
-  building blocks for it.
+- ~~Specify the sealed-capability token format.~~ Drafted —
+  [RFC-0011](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0011-sealed-capability-token-format.md)
+  (Draft, awaiting acceptance) proposes a macaroon-style format chaining `hash::MacKey` over
+  caveats, minting a live capability via `lantern-capabilities::Broker` on successful
+  `unseal`. Implementing `SealedToken`/`seal`/`attenuate`/`unseal` in this crate (or
+  `lantern-capabilities` — the RFC leaves the exact crate an unresolved question) waits on
+  RFC acceptance.
 - HKDF/Argon2id key derivation — the one ADR-0011 primitive category this prototype still
   doesn't need yet (no consumer until a real key-hierarchy/backup flow exists).
 - Wire a real hardware-seeded CSPRNG into key generation once `lantern-hal` has one, replacing
