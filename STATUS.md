@@ -77,9 +77,10 @@
   (RFC-0011/ADR-0015's own left-open question); `Keystore::unseal`'s `now: Option<u64>`
   already treats "no clock" as "unsatisfied," so this is additive, not a correctness gap.
 - A concrete consumer that calls `Keystore::unseal` and then actually mints a live capability
-  via `lantern-capabilities::Broker` — no Phase 2 service does this yet (needs
-  `lantern-filesystem` or similar); `sealed.rs`'s own tests only exercise the crypto/caveat
-  half, by design (see its module doc).
+  via `lantern-capabilities::Broker` — `lantern-filesystem`'s `Store` now exists and is the
+  natural candidate (its own `STATUS.md` names wiring sealed-capability unsealing into
+  file-access grants as its own "Next"), but doesn't do this yet; `sealed.rs`'s own tests
+  still only exercise the crypto/caveat half, by design (see its module doc).
 - HKDF/Argon2id key derivation — the one ADR-0011 primitive category this prototype still
   doesn't need yet (no consumer until a real key-hierarchy/backup flow exists).
 - Wire a real hardware-seeded CSPRNG into key generation once `lantern-hal` has one, replacing
