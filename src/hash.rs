@@ -31,6 +31,13 @@ impl Hash {
     pub const fn as_bytes(&self) -> &[u8; HASH_LEN] {
         &self.0
     }
+
+    /// Constant-time equality (`subtle::ConstantTimeEq`) — see
+    /// [`MacKey::verify`]'s doc for why a MAC comparison must never
+    /// short-circuit.
+    pub fn ct_eq(&self, other: &Hash) -> bool {
+        self.0.ct_eq(&other.0).into()
+    }
 }
 
 /// Hashes `data` in one call — content-addressing's block-naming operation.
@@ -68,25 +75,33 @@ pub struct MacError;
 pub struct MacKey([u8; MAC_KEY_LEN]);
 
 impl MacKey {
+    /// Builds a key from raw bytes — [`MacKey::from_random_bytes`] is the
+    /// entropy-sourced case (a fresh key); [`crate::sealed`]'s MAC-chaining
+    /// construction also uses this directly to turn a *previous* chain link's
+    /// MAC output into the next link's key, which isn't "random" in the
+    /// entropy-sourcing sense but is exactly as valid a BLAKE3 key.
+    pub fn from_bytes(bytes: [u8; MAC_KEY_LEN]) -> Self {
+        Self(bytes)
+    }
+
     /// Builds a key from caller-supplied random bytes — see
     /// [`crate::aead::AeadKey::from_random_bytes`]'s doc for why the bytes
     /// come from the caller, not this module.
     pub fn from_random_bytes(bytes: [u8; MAC_KEY_LEN]) -> Self {
-        Self(bytes)
+        Self::from_bytes(bytes)
     }
 
     pub fn compute(&self, data: &[u8]) -> Hash {
         Hash(*blake3::keyed_hash(&self.0, data).as_bytes())
     }
 
-    /// Constant-time comparison (`subtle::ConstantTimeEq`) — a MAC
-    /// verification that short-circuits on the first differing byte leaks
-    /// the correct MAC one byte at a time to a timing attacker (X6,
-    /// `THREAT_MODEL.md`); recomputing and branching on `==` would do
-    /// exactly that.
+    /// Constant-time comparison ([`Hash::ct_eq`]) — a MAC verification that
+    /// short-circuits on the first differing byte leaks the correct MAC one
+    /// byte at a time to a timing attacker (X6, `THREAT_MODEL.md`);
+    /// recomputing and branching on `==` would do exactly that.
     pub fn verify(&self, data: &[u8], mac: &Hash) -> Result<(), MacError> {
         let computed = self.compute(data);
-        if computed.0.ct_eq(&mac.0).into() {
+        if computed.ct_eq(mac) {
             Ok(())
         } else {
             Err(MacError)

@@ -11,7 +11,13 @@
 //! principle, X1 in `THREAT_MODEL.md`). [`hash`] also has BLAKE3's *unkeyed*
 //! hashing ([`hash::hash`]/[`hash::Hasher`]) as free functions — no secret
 //! material, so nothing to gate; see that module's doc for the content-
-//! addressing use RFC-0007 names for it.
+//! addressing use RFC-0007 names for it. [`sealed`] builds RFC-0003's third
+//! capability layer ([RFC-0011](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0011-sealed-capability-token-format.md)/
+//! [ADR-0015](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0015-sealed-capability-token-format.md)) on top of
+//! [`hash::MacKey`]: [`Keystore::seal`]/[`Keystore::unseal`]/
+//! [`Keystore::revoke_seal`] wire a macaroon-style token to real root-key
+//! custody and revocation, the same badge-gated shape as every other
+//! `Keystore` operation.
 //!
 //! [`Keystore`] is the concrete object semantics
 //! `lantern-capabilities/src/lib.rs`'s own doc names as `Broker`'s job to stay
@@ -43,6 +49,7 @@
 
 pub mod aead;
 pub mod hash;
+pub mod sealed;
 pub mod signing;
 
 use lantern_capabilities::Broker;
@@ -54,6 +61,9 @@ use lantern_kernel::state::KernelState;
 /// `MAX_GRANTS` convention.
 const MAX_KEYS: usize = 16;
 const MAX_GRANTS: usize = 32;
+/// Outstanding sealed-token identifiers this `Keystore` has issued —
+/// [`Keystore::seal`]/[`Keystore::unseal`]/[`Keystore::revoke_seal`].
+const MAX_SEALS: usize = 16;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct KeyId(u16);
@@ -135,6 +145,22 @@ pub enum KeystoreError {
     /// (authentication failure on decrypt, bad signature on verify, or a
     /// malformed public key/signature encoding).
     CryptoFailure,
+    /// [`sealed::seal`]/[`sealed::attenuate`] rejected the request (too many
+    /// caveats — [`sealed::MAX_CAVEATS`]).
+    TooManyCaveats,
+    /// [`Keystore::unseal`] was given an `identifier` this `Keystore` never
+    /// sealed a root token under — deny by default, same convention as the
+    /// [`KeystoreError::UnknownBadge`] variant above.
+    UnknownSeal,
+    /// [`Keystore::revoke_seal`] was already called for this `identifier`.
+    SealRevoked,
+    /// The token's MAC chain doesn't recompute to its own `mac` field —
+    /// forged, corrupted, or sealed under a different root key.
+    TokenInvalid,
+    /// The token is genuine and unrevoked, but at least one
+    /// [`sealed::Caveat`] isn't satisfied by the current request (rights not
+    /// a subset, or expired/no clock source to check against).
+    CaveatNotSatisfied,
     /// A real kernel-level failure surfaced by the composed
     /// [`lantern_capabilities::Broker`] (e.g. `Broker::mint`'s own
     /// `Rights::GRANT` check, or a kernel `CNodeInvoke`/IPC error) — this
@@ -166,6 +192,17 @@ struct GrantRecord {
     ops: KeyOps,
 }
 
+/// Tracks one [`Keystore::seal`]-issued root token's binding to the
+/// [`KeyId`] that holds its root key, plus revocation — the same
+/// `identifier → revoked` shape RFC-0011/ADR-0015 mandate, alongside the
+/// binding [`Keystore::unseal`] needs to actually recompute the MAC chain.
+#[derive(Clone, Copy)]
+struct SealRecord {
+    identifier: [u8; sealed::IDENTIFIER_LEN],
+    key: KeyId,
+    revoked: bool,
+}
+
 /// The crypto keystore: owns key material and a composed
 /// [`lantern_capabilities::Broker`] for the kernel-level mint/grant
 /// mechanism, adding the key-and-operation-scoped object semantics `Broker`
@@ -174,6 +211,7 @@ pub struct Keystore {
     broker: Broker,
     keys: [Option<KeyRecord>; MAX_KEYS],
     grants: [Option<GrantRecord>; MAX_GRANTS],
+    seals: [Option<SealRecord>; MAX_SEALS],
 }
 
 impl Keystore {
@@ -181,7 +219,12 @@ impl Keystore {
     /// [`lantern_capabilities::Broker::new`]; see its doc for the
     /// self-CNode-capability precondition the caller is responsible for.
     pub fn new(self_tcb: TcbId, self_cnode_cptr: CPtr) -> Self {
-        Self { broker: Broker::new(self_tcb, self_cnode_cptr), keys: [const { None }; MAX_KEYS], grants: [None; MAX_GRANTS] }
+        Self {
+            broker: Broker::new(self_tcb, self_cnode_cptr),
+            keys: [const { None }; MAX_KEYS],
+            grants: [None; MAX_GRANTS],
+            seals: [None; MAX_SEALS],
+        }
     }
 
     /// First empty slot, permanently owned by whichever key lands there —
@@ -410,6 +453,85 @@ impl Keystore {
         let public = self.verifying_key(key)?;
         signing::verify(&public, message, signature).map_err(|_| KeystoreError::CryptoFailure)
     }
+
+    /// Issues a fresh root [`sealed::SealedToken`] naming `identifier`,
+    /// gated on `badge` having been granted [`KeyOps::MAC`] for `key` — a
+    /// sealed token's root key *is* a `KeyPurpose::Mac` key, so this reuses
+    /// exactly the badge/key pairing [`Keystore::mac`] does. Records the
+    /// `identifier → key` binding locally so [`Keystore::unseal`] can later
+    /// recompute the chain — see [`sealed`]'s module doc for why minting the
+    /// eventual live capability is deliberately not this method's job.
+    pub fn seal(
+        &mut self,
+        badge: u64,
+        key: KeyId,
+        identifier: [u8; sealed::IDENTIFIER_LEN],
+        caveats: &[sealed::Caveat],
+    ) -> Result<sealed::SealedToken, KeystoreError> {
+        self.check_access(badge, key, KeyOps::MAC)?;
+        let root = match &self.key_record(key)?.material {
+            KeyMaterial::Mac(k) => k,
+            KeyMaterial::Destroyed => return Err(KeystoreError::KeyDestroyed),
+            KeyMaterial::Aead(_) | KeyMaterial::Signing(_) => return Err(KeystoreError::WrongPurpose),
+        };
+        let token = sealed::seal(root, identifier, caveats).map_err(|_| KeystoreError::TooManyCaveats)?;
+
+        let slot = self.seals.iter().position(Option::is_none).ok_or(KeystoreError::NotEnoughCapacity)?;
+        self.seals[slot] = Some(SealRecord { identifier, key, revoked: false });
+        Ok(token)
+    }
+
+    /// Verifies `token` cryptographically and evaluates its caveats against
+    /// the current request. `now` is the caller's best available clock
+    /// reading, or `None` if no clock source exists yet (`lantern-hal` has
+    /// none — RFC-0011's own unresolved question); a `Caveat::ExpiresAt`
+    /// caveat with `now = None` is treated as **unsatisfied**, not
+    /// "unchecked" — deny-by-default, same as everywhere else in this crate.
+    /// `requested_rights` is what the caller intends the eventual minted
+    /// live capability to carry; every `Caveat::RightsSubset` present must
+    /// be a superset of it.
+    ///
+    /// On `Ok`, **the caller** — not this method — is responsible for
+    /// actually minting a live capability via
+    /// [`lantern_capabilities::Broker`]; see [`sealed`]'s module doc.
+    pub fn unseal(&self, badge: u64, token: &sealed::SealedToken, now: Option<u64>, requested_rights: Rights) -> Result<(), KeystoreError> {
+        let record = self.seals.iter().flatten().find(|s| s.identifier == *token.identifier()).ok_or(KeystoreError::UnknownSeal)?;
+        if record.revoked {
+            return Err(KeystoreError::SealRevoked);
+        }
+        self.check_access(badge, record.key, KeyOps::MAC)?;
+        let root = match &self.key_record(record.key)?.material {
+            KeyMaterial::Mac(k) => k,
+            KeyMaterial::Destroyed => return Err(KeystoreError::KeyDestroyed),
+            KeyMaterial::Aead(_) | KeyMaterial::Signing(_) => return Err(KeystoreError::WrongPurpose),
+        };
+        if !sealed::verify_chain(root, token) {
+            return Err(KeystoreError::TokenInvalid);
+        }
+
+        for caveat in token.caveats() {
+            let satisfied = match caveat {
+                Some(sealed::Caveat::RightsSubset(allowed)) => requested_rights.is_subset_of(*allowed),
+                Some(sealed::Caveat::ExpiresAt(expiry)) => now.is_some_and(|n| n <= *expiry),
+                None => false,
+            };
+            if !satisfied {
+                return Err(KeystoreError::CaveatNotSatisfied);
+            }
+        }
+        Ok(())
+    }
+
+    /// Revokes every token ever sealed under `identifier` — and everything
+    /// attenuated from any of them, since every descendant's chain bottoms
+    /// out at the same root key — in one write. Mirrors
+    /// [`Keystore::revoke_access`]/[`lantern_capabilities::Broker::revoke`]'s
+    /// no-reclaim, deny-by-default shape exactly.
+    pub fn revoke_seal(&mut self, identifier: &[u8; sealed::IDENTIFIER_LEN]) -> Result<(), KeystoreError> {
+        let record = self.seals.iter_mut().flatten().find(|s| s.identifier == *identifier).ok_or(KeystoreError::UnknownSeal)?;
+        record.revoked = true;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -526,6 +648,71 @@ mod tests {
         let key = f.keystore.generate_mac_key([4u8; hash::MAC_KEY_LEN]).unwrap();
         let badge = grant_access(&mut f, key, KeyOps::MAC);
         assert_eq!(f.keystore.sign(badge, key, b"a message"), Err(KeystoreError::OpNotGranted));
+    }
+
+    #[test]
+    fn sealed_token_round_trips_through_seal_and_unseal() {
+        let mut f = setup();
+        let key = f.keystore.generate_mac_key([6u8; hash::MAC_KEY_LEN]).unwrap();
+        let badge = grant_access(&mut f, key, KeyOps::MAC);
+
+        let token = f
+            .keystore
+            .seal(badge, key, [1u8; sealed::IDENTIFIER_LEN], &[sealed::Caveat::RightsSubset(Rights::READ)])
+            .unwrap();
+        f.keystore.unseal(badge, &token, None, Rights::READ).unwrap();
+    }
+
+    #[test]
+    fn attenuated_token_still_unseals_and_narrows_further() {
+        let mut f = setup();
+        let key = f.keystore.generate_mac_key([6u8; hash::MAC_KEY_LEN]).unwrap();
+        let badge = grant_access(&mut f, key, KeyOps::MAC);
+
+        let token = f.keystore.seal(badge, key, [1u8; sealed::IDENTIFIER_LEN], &[sealed::Caveat::RightsSubset(Rights::ALL)]).unwrap();
+        // Attenuation needs no badge/Keystore at all -- it's a free function.
+        let narrowed = sealed::attenuate(&token, sealed::Caveat::ExpiresAt(1000)).unwrap();
+
+        f.keystore.unseal(badge, &narrowed, Some(999), Rights::READ).unwrap();
+        assert_eq!(f.keystore.unseal(badge, &narrowed, Some(1001), Rights::READ), Err(KeystoreError::CaveatNotSatisfied));
+        // No clock source is treated as unsatisfied, not "unchecked".
+        assert_eq!(f.keystore.unseal(badge, &narrowed, None, Rights::READ), Err(KeystoreError::CaveatNotSatisfied));
+    }
+
+    #[test]
+    fn unseal_rejects_rights_wider_than_caveat_allows() {
+        let mut f = setup();
+        let key = f.keystore.generate_mac_key([6u8; hash::MAC_KEY_LEN]).unwrap();
+        let badge = grant_access(&mut f, key, KeyOps::MAC);
+
+        let token = f
+            .keystore
+            .seal(badge, key, [1u8; sealed::IDENTIFIER_LEN], &[sealed::Caveat::RightsSubset(Rights::READ)])
+            .unwrap();
+        assert_eq!(
+            f.keystore.unseal(badge, &token, None, Rights::READ.union(Rights::WRITE)),
+            Err(KeystoreError::CaveatNotSatisfied)
+        );
+    }
+
+    #[test]
+    fn revoked_seal_rejects_unseal_even_with_a_cryptographically_valid_token() {
+        let mut f = setup();
+        let key = f.keystore.generate_mac_key([6u8; hash::MAC_KEY_LEN]).unwrap();
+        let badge = grant_access(&mut f, key, KeyOps::MAC);
+
+        let identifier = [1u8; sealed::IDENTIFIER_LEN];
+        let token = f.keystore.seal(badge, key, identifier, &[]).unwrap();
+        f.keystore.revoke_seal(&identifier).unwrap();
+
+        assert_eq!(f.keystore.unseal(badge, &token, None, Rights::NONE), Err(KeystoreError::SealRevoked));
+    }
+
+    #[test]
+    fn unknown_seal_identifier_is_rejected_deny_by_default() {
+        let f = setup();
+        let bogus = sealed::seal(&hash::MacKey::from_random_bytes([9u8; hash::MAC_KEY_LEN]), [2u8; sealed::IDENTIFIER_LEN], &[]).unwrap();
+        assert_eq!(f.keystore.unseal(0, &bogus, None, Rights::NONE), Err(KeystoreError::UnknownSeal));
     }
 
     #[test]

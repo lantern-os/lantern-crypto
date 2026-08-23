@@ -51,15 +51,35 @@
   tests for `hash` in isolation, 2 more `Keystore` integration tests
   (mint→grant→mac→verify_mac, and confirming a MAC-only badge can't sign) — 21 total, same
   clippy/target coverage as above.
+- **Sealed capabilities** (`src/sealed.rs`) — [RFC-0011](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0011-sealed-capability-token-format.md)/
+  [ADR-0015](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0015-sealed-capability-token-format.md) (Accepted)
+  implemented: a macaroon-style `SealedToken` chaining `hash::MacKey` over a fixed, closed
+  `Caveat` set (`RightsSubset`, `ExpiresAt` — Phase 2's deliberately small starting set).
+  `sealed::seal`/`sealed::attenuate` are the pure chaining construction (`attenuate` needs no
+  root key, by design — it rechains from the token's own current `mac`, which is exactly why
+  any holder can narrow a token offline without the issuer). `Keystore::seal`/
+  `Keystore::unseal`/`Keystore::revoke_seal` wire this to real root-key custody: a root key is
+  an ordinary `KeyPurpose::Mac` key, `seal`/`unseal` are gated by the same badge/key access as
+  `Keystore::mac`, and revocation is a deny-by-default `identifier → revoked` table checked
+  before any MAC work, mirroring `Broker::is_revoked` exactly. `unseal` verifies the token and
+  evaluates its caveats (constant-time MAC compare via `Hash::ct_eq`, `now: Option<u64>`
+  treated as **unsatisfied** rather than unchecked for `ExpiresAt` when no clock source is
+  given) but deliberately stops there — actually minting a live capability from a verified
+  token is left to the calling service, per RFC-0011's "never a second path to authority"
+  design. 10 more unit tests (6 for `sealed`'s pure chaining in isolation — including that
+  tampering with a stored caveat after the fact breaks verification, and that attenuation
+  needs no root key — 5 more `Keystore` integration tests covering the full seal→unseal round
+  trip, an over-wide rights request, an expired/no-clock caveat, and post-revocation denial)
+  — 31 total, same clippy/target coverage as above.
 
 ## Next
-- ~~Specify the sealed-capability token format.~~ Drafted —
-  [RFC-0011](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0011-sealed-capability-token-format.md)
-  (Draft, awaiting acceptance) proposes a macaroon-style format chaining `hash::MacKey` over
-  caveats, minting a live capability via `lantern-capabilities::Broker` on successful
-  `unseal`. Implementing `SealedToken`/`seal`/`attenuate`/`unseal` in this crate (or
-  `lantern-capabilities` — the RFC leaves the exact crate an unresolved question) waits on
-  RFC acceptance.
+- A real clock source for `Caveat::ExpiresAt` — `lantern-hal` has none yet
+  (RFC-0011/ADR-0015's own left-open question); `Keystore::unseal`'s `now: Option<u64>`
+  already treats "no clock" as "unsatisfied," so this is additive, not a correctness gap.
+- A concrete consumer that calls `Keystore::unseal` and then actually mints a live capability
+  via `lantern-capabilities::Broker` — no Phase 2 service does this yet (needs
+  `lantern-filesystem` or similar); `sealed.rs`'s own tests only exercise the crypto/caveat
+  half, by design (see its module doc).
 - HKDF/Argon2id key derivation — the one ADR-0011 primitive category this prototype still
   doesn't need yet (no consumer until a real key-hierarchy/backup flow exists).
 - Wire a real hardware-seeded CSPRNG into key generation once `lantern-hal` has one, replacing
