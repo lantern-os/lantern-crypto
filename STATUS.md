@@ -73,9 +73,11 @@
   — 31 total, same clippy/target coverage as above.
 
 ## Next
-- A real clock source for `Caveat::ExpiresAt` — `lantern-hal` has none yet
-  (RFC-0011/ADR-0015's own left-open question); `Keystore::unseal`'s `now: Option<u64>`
-  already treats "no clock" as "unsatisfied," so this is additive, not a correctness gap.
+- ~~A real clock source for `Caveat::ExpiresAt` — `lantern-hal` has none yet.~~ Resolved —
+  [RFC-0012](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0012-monotonic-clock-primitive.md)/[ADR-0016](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0016-monotonic-clock-primitive.md)
+  add `Hal::monotonic_time_ns()` (`riscv64`, via the `time` CSR). Not yet wired into any
+  `Keystore::unseal` call site — that's the concrete-consumer item below, not this crate's own
+  work (`Keystore::unseal`'s `now: Option<u64>` stays caller-supplied by design).
 - A concrete consumer that calls `Keystore::unseal` and then actually mints a live capability
   via `lantern-capabilities::Broker` — `lantern-filesystem`'s `Store` now exists and is the
   natural candidate (its own `STATUS.md` names wiring sealed-capability unsealing into
