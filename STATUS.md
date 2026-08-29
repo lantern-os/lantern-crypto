@@ -90,7 +90,13 @@
 - Turning `Keystore` into deployable confined-service code needs `lantern-runtime`'s not-yet-built
   confined execution environment, same gap `lantern-capabilities/STATUS.md` documents for
   `Broker` itself — this crate's methods still take `&mut KernelState` directly, valid only for
-  privileged, same-address-space code.
+  privileged, same-address-space code. **Progress from the other side:** `lantern-runtime` now
+  exposes a `lantern:crypto/keystore` WIT interface and the resource-scoped
+  handle ⇄ badge mapping that reaches it
+  ([RFC-0014](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0014-wit-handle-capability-mapping.md)/[ADR-0018](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0018-wit-handle-capability-mapping.md),
+  `lantern-runtime/STATUS.md`). It drives a *real* `Keystore` today via an in-process
+  `KeystoreService` stand-in; what's still missing is exactly this crate's confined-IPC-service
+  form, not the Wasm-guest-facing surface.
 
 ## Blocked on
 - Hardware enclave story ([`lantern-hal`](https://github.com/lantern-os/lantern-hal), [`lantern-boot`](https://github.com/lantern-os/lantern-boot))
