@@ -52,9 +52,8 @@ pub mod hash;
 pub mod sealed;
 pub mod signing;
 
-use lantern_capabilities::Broker;
+use lantern_capabilities::{Broker, KernelBackend, SyscallError};
 use lantern_kernel::cap::{CPtr, Rights, TcbId};
-use lantern_kernel::error::SyscallError;
 use lantern_kernel::state::KernelState;
 
 /// Fixed capacity, no heap — matches [`lantern_capabilities::Broker`]'s own
@@ -209,18 +208,26 @@ struct SealRecord {
 /// itself deliberately doesn't know about.
 pub struct Keystore {
     broker: Broker,
+    /// This keystore's own thread identity — needed to build a
+    /// [`KernelBackend`] for the composed [`Broker`] on each mint/grant.
+    /// (A fully confined keystore would use `lantern_capabilities::Abi` and
+    /// carry no `TcbId`; that is a later step — this crate still takes
+    /// `&mut KernelState` in its own public API.)
+    self_tcb: TcbId,
     keys: [Option<KeyRecord>; MAX_KEYS],
     grants: [Option<GrantRecord>; MAX_GRANTS],
     seals: [Option<SealRecord>; MAX_SEALS],
 }
 
 impl Keystore {
-    /// `self_tcb`/`self_cnode_cptr` — forwarded to
-    /// [`lantern_capabilities::Broker::new`]; see its doc for the
-    /// self-CNode-capability precondition the caller is responsible for.
+    /// `self_tcb`/`self_cnode_cptr` — `self_cnode_cptr` is forwarded to
+    /// [`lantern_capabilities::Broker::new`] (see its doc for the
+    /// self-CNode-capability precondition); `self_tcb` is retained to build
+    /// the [`KernelBackend`] the composed `Broker` needs.
     pub fn new(self_tcb: TcbId, self_cnode_cptr: CPtr) -> Self {
         Self {
-            broker: Broker::new(self_tcb, self_cnode_cptr),
+            broker: Broker::new(self_cnode_cptr),
+            self_tcb,
             keys: [const { None }; MAX_KEYS],
             grants: [None; MAX_GRANTS],
             seals: [None; MAX_SEALS],
@@ -314,7 +321,14 @@ impl Keystore {
         }
 
         let slot = self.grants.iter().position(Option::is_none).ok_or(KeystoreError::NotEnoughCapacity)?;
-        let badge = self.broker.mint(state, source_slot, scratch_slot, Rights::READ.union(Rights::GRANT)).map_err(KeystoreError::Kernel)?;
+        let badge = self.broker
+            .mint(
+                &mut KernelBackend::new(state, self.self_tcb),
+                source_slot,
+                scratch_slot,
+                lantern_capabilities::Rights::READ.union(lantern_capabilities::Rights::GRANT),
+            )
+            .map_err(KeystoreError::Kernel)?;
         self.grants[slot] = Some(GrantRecord { badge, key, ops });
         Ok(badge)
     }
@@ -323,7 +337,9 @@ impl Keystore {
     /// client blocked in `Recv` on `endpoint_cptr` — forwards to
     /// [`lantern_capabilities::Broker::grant`]; see its doc.
     pub fn deliver_grant(&self, state: &mut KernelState, endpoint_cptr: CPtr, scratch_slot: CPtr, payload: (usize, usize)) -> Result<(), KeystoreError> {
-        self.broker.grant(state, endpoint_cptr, scratch_slot, payload).map_err(KeystoreError::Kernel)
+        self.broker
+            .grant(&mut KernelBackend::new(state, self.self_tcb), endpoint_cptr, scratch_slot, payload)
+            .map_err(KeystoreError::Kernel)
     }
 
     /// Like [`Keystore::deliver_grant`], but replies to a `Call` this
@@ -332,7 +348,9 @@ impl Keystore {
     /// request/response shape this fits (a client asking for access to a
     /// specific key, granted in the same round trip).
     pub fn deliver_grant_via_reply(&self, state: &mut KernelState, scratch_slot: CPtr, payload: (usize, usize)) -> Result<(), KeystoreError> {
-        self.broker.grant_via_reply(state, scratch_slot, payload).map_err(KeystoreError::Kernel)
+        self.broker
+            .grant_via_reply(&mut KernelBackend::new(state, self.self_tcb), scratch_slot, payload)
+            .map_err(KeystoreError::Kernel)
     }
 
     /// Marks `badge` revoked — forwards to
