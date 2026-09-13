@@ -39,22 +39,38 @@
 //! exists; today's tests pass fixed/counter-derived bytes, which is only
 //! safe because it's a test.
 //!
-//! **What this is not yet**, matching `lantern-capabilities`'s own honesty
-//! about `Broker`: a real, standalone confined program. [`Keystore`]'s
-//! methods take `&mut lantern_kernel::state::KernelState` directly, the same
-//! privileged-code-only shape `Broker` has today — turning this into
-//! deployable confined-service code still needs `lantern-runtime`'s
-//! not-yet-built confined execution environment, not more work here.
+//! **Backend split** ([RFC-0018](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0018-confined-execution-port.md)/
+//! [ADR-0022](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0022-confined-service-model-and-call-transport.md),
+//! matching `lantern-capabilities`'s own): [`Keystore`]'s badge-granting
+//! methods (`request_key_access`/`deliver_grant`/`deliver_grant_via_reply`)
+//! take `&mut impl BrokerBackend` and forward to the composed
+//! [`lantern_capabilities::Broker`], the same way `Broker`'s own methods do —
+//! `Keystore` carries no `TcbId` of its own. The actual key-material
+//! operations (`encrypt`/`decrypt`/`sign`/`mac`/`verify_mac`) never touched
+//! `KernelState` in the first place (a badge alone is enough to
+//! [`Keystore::check_access`]-gate them), so they need no split at all.
+//! `lantern-crypto` built with `default-features = false` links only
+//! `lantern-abi` and the crypto primitives — nothing from the TCB — for a
+//! confined `keystore-service` (`lantern-boot`). [`sealed`] (RFC-0011) is
+//! gated behind the `kernel-backend` feature: its `Caveat::RightsSubset`
+//! describes `lantern_kernel::cap::Rights` (what an eventual *kernel*
+//! capability would carry once unsealed), a fundamentally kernel-level
+//! concept RFC-0019's wire protocol doesn't cover — a confined
+//! `keystore-service` v0 doesn't need `seal`/`unseal` yet; revisit if one
+//! does.
 #![cfg_attr(not(test), no_std)]
 
 pub mod aead;
 pub mod hash;
+#[cfg(feature = "kernel-backend")]
 pub mod sealed;
 pub mod signing;
+pub mod wire;
 
-use lantern_capabilities::{Broker, KernelBackend, SyscallError};
-use lantern_kernel::cap::{CPtr, Rights, TcbId};
-use lantern_kernel::state::KernelState;
+use lantern_abi::wire::CPtr;
+use lantern_capabilities::{Broker, BrokerBackend, SyscallError};
+#[cfg(feature = "kernel-backend")]
+use lantern_kernel::cap::Rights;
 
 /// Fixed capacity, no heap — matches [`lantern_capabilities::Broker`]'s own
 /// `MAX_GRANTS` convention.
@@ -62,6 +78,7 @@ const MAX_KEYS: usize = 16;
 const MAX_GRANTS: usize = 32;
 /// Outstanding sealed-token identifiers this `Keystore` has issued —
 /// [`Keystore::seal`]/[`Keystore::unseal`]/[`Keystore::revoke_seal`].
+#[cfg(feature = "kernel-backend")]
 const MAX_SEALS: usize = 16;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -195,6 +212,7 @@ struct GrantRecord {
 /// [`KeyId`] that holds its root key, plus revocation — the same
 /// `identifier → revoked` shape RFC-0011/ADR-0015 mandate, alongside the
 /// binding [`Keystore::unseal`] needs to actually recompute the MAC chain.
+#[cfg(feature = "kernel-backend")]
 #[derive(Clone, Copy)]
 struct SealRecord {
     identifier: [u8; sealed::IDENTIFIER_LEN],
@@ -208,28 +226,25 @@ struct SealRecord {
 /// itself deliberately doesn't know about.
 pub struct Keystore {
     broker: Broker,
-    /// This keystore's own thread identity — needed to build a
-    /// [`KernelBackend`] for the composed [`Broker`] on each mint/grant.
-    /// (A fully confined keystore would use `lantern_capabilities::Abi` and
-    /// carry no `TcbId`; that is a later step — this crate still takes
-    /// `&mut KernelState` in its own public API.)
-    self_tcb: TcbId,
     keys: [Option<KeyRecord>; MAX_KEYS],
     grants: [Option<GrantRecord>; MAX_GRANTS],
+    #[cfg(feature = "kernel-backend")]
     seals: [Option<SealRecord>; MAX_SEALS],
 }
 
 impl Keystore {
-    /// `self_tcb`/`self_cnode_cptr` — `self_cnode_cptr` is forwarded to
+    /// `self_cnode_cptr` is forwarded to
     /// [`lantern_capabilities::Broker::new`] (see its doc for the
-    /// self-CNode-capability precondition); `self_tcb` is retained to build
-    /// the [`KernelBackend`] the composed `Broker` needs.
-    pub fn new(self_tcb: TcbId, self_cnode_cptr: CPtr) -> Self {
+    /// self-CNode-capability precondition). `Keystore` carries no `TcbId` of
+    /// its own — every method that needs one (the badge-granting methods
+    /// below) takes a `&mut impl BrokerBackend` instead, the caller's job to
+    /// supply.
+    pub fn new(self_cnode_cptr: CPtr) -> Self {
         Self {
             broker: Broker::new(self_cnode_cptr),
-            self_tcb,
             keys: [const { None }; MAX_KEYS],
             grants: [None; MAX_GRANTS],
+            #[cfg(feature = "kernel-backend")]
             seals: [None; MAX_SEALS],
         }
     }
@@ -304,9 +319,19 @@ impl Keystore {
     /// anything to a client yet — call [`Keystore::deliver_grant`] (or
     /// [`Keystore::deliver_grant_via_reply`]) next, same two-step shape as
     /// `Broker::mint` then `Broker::grant`.
+    ///
+    /// Mints with `Rights::WRITE | Rights::GRANT` — **not** `READ` (the
+    /// granted capability is a badged copy of the keystore's own endpoint,
+    /// per RFC-0019/ADR-0022; a client only ever `Call`s it, requiring
+    /// `WRITE`, never `Recv`s on it, so `READ` would be unused authority).
+    /// `WRITE`'s absence here was a real, QEMU-caught bug (2026-09-13): a
+    /// confined client's `Call` on a `READ`-only granted capability fails
+    /// with `IllegalOperation` — harmless in Phase 2's in-process form, where
+    /// no real IPC ever crossed this capability, but a genuine blocker once
+    /// the keystore runs confined.
     pub fn request_key_access(
         &mut self,
-        state: &mut KernelState,
+        backend: &mut impl BrokerBackend,
         key: KeyId,
         ops: KeyOps,
         source_slot: CPtr,
@@ -323,10 +348,10 @@ impl Keystore {
         let slot = self.grants.iter().position(Option::is_none).ok_or(KeystoreError::NotEnoughCapacity)?;
         let badge = self.broker
             .mint(
-                &mut KernelBackend::new(state, self.self_tcb),
+                backend,
                 source_slot,
                 scratch_slot,
-                lantern_capabilities::Rights::READ.union(lantern_capabilities::Rights::GRANT),
+                lantern_capabilities::Rights::WRITE.union(lantern_capabilities::Rights::GRANT),
             )
             .map_err(KeystoreError::Kernel)?;
         self.grants[slot] = Some(GrantRecord { badge, key, ops });
@@ -336,10 +361,8 @@ impl Keystore {
     /// Transfers the badge [`Keystore::request_key_access`] just minted to a
     /// client blocked in `Recv` on `endpoint_cptr` — forwards to
     /// [`lantern_capabilities::Broker::grant`]; see its doc.
-    pub fn deliver_grant(&self, state: &mut KernelState, endpoint_cptr: CPtr, scratch_slot: CPtr, payload: (usize, usize)) -> Result<(), KeystoreError> {
-        self.broker
-            .grant(&mut KernelBackend::new(state, self.self_tcb), endpoint_cptr, scratch_slot, payload)
-            .map_err(KeystoreError::Kernel)
+    pub fn deliver_grant(&self, backend: &mut impl BrokerBackend, endpoint_cptr: CPtr, scratch_slot: CPtr, payload: (usize, usize)) -> Result<(), KeystoreError> {
+        self.broker.grant(backend, endpoint_cptr, scratch_slot, payload).map_err(KeystoreError::Kernel)
     }
 
     /// Like [`Keystore::deliver_grant`], but replies to a `Call` this
@@ -347,10 +370,8 @@ impl Keystore {
     /// [`lantern_capabilities::Broker::grant_via_reply`]; see its doc for the
     /// request/response shape this fits (a client asking for access to a
     /// specific key, granted in the same round trip).
-    pub fn deliver_grant_via_reply(&self, state: &mut KernelState, scratch_slot: CPtr, payload: (usize, usize)) -> Result<(), KeystoreError> {
-        self.broker
-            .grant_via_reply(&mut KernelBackend::new(state, self.self_tcb), scratch_slot, payload)
-            .map_err(KeystoreError::Kernel)
+    pub fn deliver_grant_via_reply(&self, backend: &mut impl BrokerBackend, scratch_slot: CPtr, payload: (usize, usize)) -> Result<(), KeystoreError> {
+        self.broker.grant_via_reply(backend, scratch_slot, payload).map_err(KeystoreError::Kernel)
     }
 
     /// Marks `badge` revoked — forwards to
@@ -379,6 +400,19 @@ impl Keystore {
             return Err(KeystoreError::OpNotGranted);
         }
         Ok(())
+    }
+
+    /// The [`KeyId`] `badge` was granted against, or `None` if this keystore
+    /// never granted `badge` at all. [RFC-0019](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0019-confined-service-call-protocol.md)'s
+    /// wire protocol carries no key argument — "the badge alone identifies
+    /// `(KeyId, KeyOps)`" — so a confined `keystore-service`'s request
+    /// dispatcher needs this to turn an incoming badge into the `key`
+    /// argument [`Keystore::sign`]/[`Keystore::encrypt`]/[`Keystore::decrypt`]
+    /// still take. Deliberately does **not** also check revocation/ops here
+    /// (unlike [`Keystore::check_access`]) — this only answers "which key,
+    /// if any", the operation methods below still gate on the real thing.
+    pub fn key_for_badge(&self, badge: u64) -> Option<KeyId> {
+        self.grants.iter().flatten().find(|g| g.badge == badge).map(|g| g.key)
     }
 
     /// Encrypts `buffer` in place under `key`, gated on `badge` having been
@@ -479,6 +513,7 @@ impl Keystore {
     /// `identifier → key` binding locally so [`Keystore::unseal`] can later
     /// recompute the chain — see [`sealed`]'s module doc for why minting the
     /// eventual live capability is deliberately not this method's job.
+    #[cfg(feature = "kernel-backend")]
     pub fn seal(
         &mut self,
         badge: u64,
@@ -512,6 +547,7 @@ impl Keystore {
     /// On `Ok`, **the caller** — not this method — is responsible for
     /// actually minting a live capability via
     /// [`lantern_capabilities::Broker`]; see [`sealed`]'s module doc.
+    #[cfg(feature = "kernel-backend")]
     pub fn unseal(&self, badge: u64, token: &sealed::SealedToken, now: Option<u64>, requested_rights: Rights) -> Result<(), KeystoreError> {
         let record = self.seals.iter().flatten().find(|s| s.identifier == *token.identifier()).ok_or(KeystoreError::UnknownSeal)?;
         if record.revoked {
@@ -545,6 +581,7 @@ impl Keystore {
     /// out at the same root key — in one write. Mirrors
     /// [`Keystore::revoke_access`]/[`lantern_capabilities::Broker::revoke`]'s
     /// no-reclaim, deny-by-default shape exactly.
+    #[cfg(feature = "kernel-backend")]
     pub fn revoke_seal(&mut self, identifier: &[u8; sealed::IDENTIFIER_LEN]) -> Result<(), KeystoreError> {
         let record = self.seals.iter_mut().flatten().find(|s| s.identifier == *identifier).ok_or(KeystoreError::UnknownSeal)?;
         record.revoked = true;
@@ -552,11 +589,13 @@ impl Keystore {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "kernel-backend"))]
 mod tests {
     use super::*;
-    use lantern_kernel::cap::{CNode, CNodeId, Capability, EndpointId, NotificationId};
+    use lantern_capabilities::KernelBackend;
+    use lantern_kernel::cap::{CNode, CNodeId, Capability, EndpointId, NotificationId, TcbId};
     use lantern_kernel::object::{Notification, Tcb};
+    use lantern_kernel::state::KernelState;
     use lantern_hal::{MessageTag, TrapFrame};
     use lantern_kernel::ipc;
 
@@ -592,7 +631,7 @@ mod tests {
         *state.cnodes.get_mut(keystore_cnode.0 as usize).unwrap().slot_mut(1).unwrap() = ep;
 
         let notif_idx = state.notifications.alloc(Notification::new()).unwrap();
-        let source = Capability::Notification { id: NotificationId(notif_idx as u16), badge: 0, rights: Rights::READ.union(Rights::GRANT) };
+        let source = Capability::Notification { id: NotificationId(notif_idx as u16), badge: 0, rights: Rights::WRITE.union(Rights::GRANT) };
         *state.cnodes.get_mut(keystore_cnode.0 as usize).unwrap().slot_mut(SOURCE_SLOT).unwrap() = source;
 
         let client_cnode = CNodeId(state.cnodes.alloc(CNode::empty()).unwrap() as u16);
@@ -600,7 +639,7 @@ mod tests {
         state.tcbs.get_mut(client_tcb.0 as usize).unwrap().cspace = Some(client_cnode);
         *state.cnodes.get_mut(client_cnode.0 as usize).unwrap().slot_mut(1).unwrap() = ep;
 
-        let keystore = Keystore::new(keystore_tcb, 0);
+        let keystore = Keystore::new(0);
         Fixture { state, keystore, keystore_tcb, client_tcb, ep_cptr: 1 }
     }
 
@@ -616,8 +655,13 @@ mod tests {
         ipc::recv(&mut f.state, f.client_tcb, f.ep_cptr, &mut recv_frame).unwrap();
         assert_eq!(f.state.scheduler.current, Some(f.keystore_tcb));
 
-        let badge = f.keystore.request_key_access(&mut f.state, key, ops, SOURCE_SLOT, SCRATCH_SLOT).unwrap();
-        f.keystore.deliver_grant(&mut f.state, f.ep_cptr, SCRATCH_SLOT, (0, 0)).unwrap();
+        let badge = f
+            .keystore
+            .request_key_access(&mut KernelBackend::new(&mut f.state, f.keystore_tcb), key, ops, SOURCE_SLOT, SCRATCH_SLOT)
+            .unwrap();
+        f.keystore
+            .deliver_grant(&mut KernelBackend::new(&mut f.state, f.keystore_tcb), f.ep_cptr, SCRATCH_SLOT, (0, 0))
+            .unwrap();
         badge
     }
 
@@ -805,7 +849,13 @@ mod tests {
         let key = f.keystore.generate_aead_key([1u8; aead::AEAD_KEY_LEN]).unwrap();
         f.state.scheduler.current = Some(f.keystore_tcb);
         assert_eq!(
-            f.keystore.request_key_access(&mut f.state, key, KeyOps::SIGN, SOURCE_SLOT, SCRATCH_SLOT),
+            f.keystore.request_key_access(
+                &mut KernelBackend::new(&mut f.state, f.keystore_tcb),
+                key,
+                KeyOps::SIGN,
+                SOURCE_SLOT,
+                SCRATCH_SLOT
+            ),
             Err(KeystoreError::WrongPurpose)
         );
     }

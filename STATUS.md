@@ -1,6 +1,16 @@
 # lantern-crypto — Status
 
-**Phase:** 2 — opened per [RFC-0009](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0009-phase-1-to-phase-2-transition.md)/[ADR-0014](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0014-phase-1-complete-phase-2-opened.md), **closed** per [RFC-0017](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0017-phase-2-to-phase-3-transition.md)/[ADR-0021](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0021-phase-2-complete-phase-3-opened.md): the Phase 2 exit criterion is met. This crate's "Next" items continue; the Roadmap's gate has moved to Phase 3, where encrypted-at-rest and provenance work belong. **Carried forward (ADR-0021), in progress:** `Keystore`'s methods take `&mut KernelState` — turning it into a deployable confined IPC service is Phase 3's foundational port ([RFC-0018](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0018-confined-execution-port.md)/[ADR-0022](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0022-confined-service-model-and-call-transport.md), Accepted). As of 2026-09-05 the composed `Broker` runs on the new `BrokerBackend` abstraction: `Keystore` threads a `lantern_capabilities::KernelBackend` internally at its 4 broker call sites (mechanical; its own public `&mut KernelState` API is unchanged, 31 tests green). Its own confinement — `Keystore`'s logic moving into a program via `lantern_capabilities::Abi`, key material staying in its own address space — is the remaining ADR-0022 Part 1 work. The SIGN/ENCRYPT/DECRYPT request/reply wire format is now fixed ([RFC-0019](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0019-confined-service-call-protocol.md)/[ADR-0024](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0024-confined-service-call-protocol.md), Accepted 2026-09-12) — badge alone identifies `(KeyId, KeyOps)`, no key on the wire; `DECRYPT` returns an empty payload on tag mismatch. Implementing it against `lantern_abi::frame`'s `Channel` is next.
+**Phase:** 2 — opened per [RFC-0009](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0009-phase-1-to-phase-2-transition.md)/[ADR-0014](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0014-phase-1-complete-phase-2-opened.md), **closed** per [RFC-0017](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0017-phase-2-to-phase-3-transition.md)/[ADR-0021](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0021-phase-2-complete-phase-3-opened.md): the Phase 2 exit criterion is met. This crate's "Next" items continue; the Roadmap's gate has moved to Phase 3, where encrypted-at-rest and provenance work belong. **`Keystore` is now confinable** (2026-09-13,
+[RFC-0018](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0018-confined-execution-port.md)/[ADR-0022](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0022-confined-service-model-and-call-transport.md)):
+`request_key_access`/`deliver_grant`/`deliver_grant_via_reply` take `&mut impl BrokerBackend`
+(no more `TcbId`/`KernelState` in `Keystore`'s own struct), `sign`/`encrypt`/`decrypt` never
+needed either. `default-features = false` links only `lantern-abi` + the crypto primitives.
+`lantern-boot/keystore-service` runs a **real** confined `Keystore` under QEMU, live
+`Broker::mint`+`grant_via_reply` included — proven. Its RFC-0019 wire exchange (SIGN/
+ENCRYPT/DECRYPT over `Channel`) is fully implemented and unit-tested (this crate's own
+`wire` module, 44 tests total) but **not yet demonstrated live**: it's blocked by a real,
+newly-characterized `lantern-kernel` scheduling bug, not anything here — see
+`lantern-kernel/STATUS.md`'s "Known Phase 1 gaps" and `lantern-boot/STATUS.md`.
 
 ## Done
 - Service surface and initial primitive set drafted and reviewed ([ARCHITECTURE.md](./ARCHITECTURE.md)).
@@ -71,6 +81,46 @@
   needs no root key — 5 more `Keystore` integration tests covering the full seal→unseal round
   trip, an over-wide rights request, an expired/no-clock caveat, and post-revocation denial)
   — 31 total, same clippy/target coverage as above.
+- **`Keystore` confined, and its wire protocol implemented** (2026-09-13,
+  [RFC-0018](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0018-confined-execution-port.md)/[ADR-0022](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0022-confined-service-model-and-call-transport.md)/
+  [RFC-0019](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0019-confined-service-call-protocol.md)/[ADR-0024](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0024-confined-service-call-protocol.md)):
+  - **API port**, mirroring `lantern-capabilities::Broker`'s own backend split: `Cargo.toml`
+    gained a `kernel-backend` feature (default), `lantern-hal`/`lantern-kernel` now optional,
+    unconditional `lantern-abi`. `Keystore` dropped its `self_tcb: TcbId` field entirely;
+    `request_key_access`/`deliver_grant`/`deliver_grant_via_reply` take `&mut impl
+    BrokerBackend` instead of `&mut KernelState`, forwarding straight to the composed
+    `Broker`. `sign`/`encrypt`/`decrypt`/`mac`/`verify_mac`/`verifying_key`/`verify` never
+    took `KernelState` in the first place. New `key_for_badge(&self, badge) -> Option<KeyId>`
+    — RFC-0019's wire protocol carries no key on the wire, so a confined service's dispatcher
+    needs this to turn a badge into the `key` argument those methods still take.
+    [`sealed`] (RFC-0011) is gated behind `kernel-backend` — its `Caveat::RightsSubset`
+    describes `lantern_kernel::cap::Rights`, a kernel-level concept RFC-0019 doesn't cover; a
+    confined `keystore-service` v0 doesn't need `seal`/`unseal` yet.
+  - **Real, QEMU-caught bug fixed**: `request_key_access` minted with `Rights::READ |
+    Rights::GRANT` — harmless in Phase 2's in-process form (nothing ever `Call`ed through the
+    kernel capability itself), but a confined client's `Call` on a `READ`-only granted
+    capability fails outright (`Call` requires `Rights::WRITE`). Now mints `WRITE | GRANT`.
+    Every test fixture across this crate, `lantern-filesystem`, and `lantern-runtime` that
+    stands in for a real service's own retained-authority capability needed the same fix
+    (they used `READ | GRANT` too).
+  - **New `wire` module** — the `keystore` half of RFC-0019/ADR-0024's protocol as a pure,
+    fully unit-tested function: `handle_request(keystore, badge, op, request, reply_buf) ->
+    (status, len)` (server side — `key_for_badge` then dispatches SIGN/ENCRYPT/DECRYPT,
+    every parse bounds-checked, badge resolution happens *before* any payload parsing) plus
+    `encode_encrypt_request`/`decode_encrypt_reply`/`encode_decrypt_request`/
+    `decode_decrypt_reply`/`encode_sign_request`/`decode_sign_reply` (client-side codecs, so
+    a caller — `lantern-boot/keystore-client`, eventually `lantern-filesystem::Store` — never
+    re-derives the wire shape). 15 new tests (7 `handle_request` behavior incl. a
+    tag-mismatch DECRYPT leaking nothing, 8 codec round-trips) — 44 total. clippy clean host +
+    `riscv64` (`--no-default-features` too — confirms this crate is genuinely confined-buildable).
+  - **`lantern-boot/keystore-service` + `keystore-client`**: a real confined `Keystore`
+    (`default-features = false`) running a live grant round (`Recv` → `request_key_access` →
+    `deliver_grant_via_reply`, all through the `Abi` backend, real `ecall`s) — **confirmed
+    working under QEMU**: `keystore-service Mint'd ... ok=true`, `Reply'd ... ok=true`. The
+    *second* phase (the client using its granted badge to `Channel::call` SIGN/ENCRYPT/DECRYPT)
+    does not complete — see `lantern-kernel/STATUS.md`'s newly-characterized scheduling bug.
+    Not this crate's fault: the wire dispatch this phase would exercise is the same
+    `wire::handle_request` already unit-tested above.
 
 ## Next
 - ~~A real clock source for `Caveat::ExpiresAt` — `lantern-hal` has none yet.~~ Resolved —
@@ -87,18 +137,24 @@
   doesn't need yet (no consumer until a real key-hierarchy/backup flow exists).
 - Wire a real hardware-seeded CSPRNG into key generation once `lantern-hal` has one, replacing
   today's caller-supplied-bytes placeholder.
-- Turning `Keystore` into deployable confined-service code needs `lantern-runtime`'s not-yet-built
-  confined execution environment, same gap `lantern-capabilities/STATUS.md` documents for
-  `Broker` itself — this crate's methods still take `&mut KernelState` directly, valid only for
-  privileged, same-address-space code. **Progress from the other side:** `lantern-runtime` now
-  exposes a `lantern:crypto/keystore` WIT interface and the resource-scoped
-  handle ⇄ badge mapping that reaches it
-  ([RFC-0014](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0014-wit-handle-capability-mapping.md)/[ADR-0018](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0018-wit-handle-capability-mapping.md),
-  `lantern-runtime/STATUS.md`). It drives a *real* `Keystore` today via an in-process
-  `KeystoreService` stand-in; what's still missing is exactly this crate's confined-IPC-service
-  form, not the Wasm-guest-facing surface.
+- ~~Turning `Keystore` into deployable confined-service code needs `lantern-runtime`'s
+  not-yet-built confined execution environment~~ — **the API port is done 2026-09-13** (see
+  "Done" above); `lantern-runtime`'s own `KeystoreService`/WIT surface (`lantern-runtime/STATUS.md`)
+  is unaffected (still the in-process stand-in) and is the *next* thing to actually point at
+  a confined `keystore-service` instead, once the kernel blocker below is resolved.
+- **Blocked, not this crate's own work:** demonstrating the wire exchange live needs
+  `lantern-kernel`'s newly-characterized scheduling bug root-caused/fixed first (see
+  "Blocked on"). Once it is, `keystore-service`'s Phase 2 loop and `wire::handle_request`
+  are already there, ready to exercise for real.
 
 ## Blocked on
+- **`lantern-boot-keystore-demo`'s live wire-exchange proof is blocked on a
+  `lantern-kernel` bug** (2026-09-13) — a confined client's `Call`, issued immediately after
+  being resumed via a *different* thread's `Reply` (a real capability transfer), never
+  reaches the service: no kernel error, capability/rights/queue state all verified correct,
+  yet neither thread's state changes. Not this crate's code — `wire::handle_request` and its
+  client-side codecs are already fully unit-tested and waiting. See
+  `lantern-kernel/STATUS.md`'s "Known Phase 1 gaps" for the full diagnostic record.
 - Hardware enclave story ([`lantern-hal`](https://github.com/lantern-os/lantern-hal), [`lantern-boot`](https://github.com/lantern-os/lantern-boot))
   — a Phase 4 concern (hardware-backed key custody), not blocking this software-only keystore
   prototype.
