@@ -118,9 +118,10 @@ newly-characterized `lantern-kernel` scheduling bug, not anything here — see
     `deliver_grant_via_reply`, all through the `Abi` backend, real `ecall`s) — **confirmed
     working under QEMU**: `keystore-service Mint'd ... ok=true`, `Reply'd ... ok=true`. The
     *second* phase (the client using its granted badge to `Channel::call` SIGN/ENCRYPT/DECRYPT)
-    does not complete — see `lantern-kernel/STATUS.md`'s newly-characterized scheduling bug.
-    Not this crate's fault: the wire dispatch this phase would exercise is the same
-    `wire::handle_request` already unit-tested above.
+    initially didn't complete — a `lantern-kernel` scheduling bug, root-caused and fixed the
+    same day (2026-09-13, see `lantern-kernel/STATUS.md`), not a flaw in this crate's wire
+    dispatch. Now 4/4 reproducible `Signal'd SUCCESS` — full ENCRYPT/DECRYPT round trip
+    through the confined service over a real shared `Frame`.
 
 ## Next
 - ~~A real clock source for `Caveat::ExpiresAt` — `lantern-hal` has none yet.~~ Resolved —
