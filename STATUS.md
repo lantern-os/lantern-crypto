@@ -142,20 +142,21 @@ newly-characterized `lantern-kernel` scheduling bug, not anything here — see
   not-yet-built confined execution environment~~ — **the API port is done 2026-09-13** (see
   "Done" above); `lantern-runtime`'s own `KeystoreService`/WIT surface (`lantern-runtime/STATUS.md`)
   is unaffected (still the in-process stand-in) and is the *next* thing to actually point at
-  a confined `keystore-service` instead, once the kernel blocker below is resolved.
-- **Blocked, not this crate's own work:** demonstrating the wire exchange live needs
-  `lantern-kernel`'s newly-characterized scheduling bug root-caused/fixed first (see
-  "Blocked on"). Once it is, `keystore-service`'s Phase 2 loop and `wire::handle_request`
-  are already there, ready to exercise for real.
+  a confined `keystore-service` instead — no longer blocked on anything, just un-started.
+- ~~Blocked, not this crate's own work: demonstrating the wire exchange live needs
+  `lantern-kernel`'s newly-characterized scheduling bug root-caused/fixed first~~ — done
+  the same day (2026-09-13, see `lantern-kernel/STATUS.md`); `keystore-service`'s Phase 2
+  loop now completes 4/4 reproducible, and the same `wire::handle_request`/`ChannelCipher`
+  pairing has since also proven itself as the *server* side of a nested IPC call from a
+  confined `store-service` (`lantern-boot-store-demo`,
+  `lantern-filesystem/STATUS.md`) — the realistic "middle service" shape ADR-0022
+  describes, not just a direct end-user client.
 
 ## Blocked on
-- **`lantern-boot-keystore-demo`'s live wire-exchange proof is blocked on a
-  `lantern-kernel` bug** (2026-09-13) — a confined client's `Call`, issued immediately after
-  being resumed via a *different* thread's `Reply` (a real capability transfer), never
-  reaches the service: no kernel error, capability/rights/queue state all verified correct,
-  yet neither thread's state changes. Not this crate's code — `wire::handle_request` and its
-  client-side codecs are already fully unit-tested and waiting. See
-  `lantern-kernel/STATUS.md`'s "Known Phase 1 gaps" for the full diagnostic record.
+- ~~`lantern-boot-keystore-demo`'s live wire-exchange proof is blocked on a
+  `lantern-kernel` bug~~ Resolved — root-caused and fixed 2026-09-13
+  (`lantern-kernel/STATUS.md`'s "Known Phase 1 gaps"); the demo now completes 4/4
+  reproducible.
 - Hardware enclave story ([`lantern-hal`](https://github.com/lantern-os/lantern-hal), [`lantern-boot`](https://github.com/lantern-os/lantern-boot))
   — a Phase 4 concern (hardware-backed key custody), not blocking this software-only keystore
   prototype.
