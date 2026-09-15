@@ -182,6 +182,19 @@ pub enum KeystoreError {
     /// `Rights::GRANT` check, or a kernel `CNodeInvoke`/IPC error) — this
     /// crate never invents its own meaning for these, just forwards them.
     Kernel(SyscallError),
+    /// A `Channel`-based caller's (e.g. `lantern-runtime`'s `IpcKeystore`)
+    /// marshalling failure — malformed reply, oversized payload, or a real
+    /// kernel-level `SyscallError` surfaced through the `Channel` itself, as
+    /// opposed to a denial the remote `keystore-service` *decided on
+    /// purpose* ([`KeystoreError::RemoteDenied`]). Mirrors
+    /// `lantern_filesystem::StoreError::Channel`'s identical split, one
+    /// layer down.
+    Channel(lantern_abi::frame::ChannelError),
+    /// The remote `keystore-service` rejected a `Channel`-based request over
+    /// RFC-0019's wire protocol — carries the raw status code
+    /// (`wire::status::{ACCESS,INVALID,FAILED}`), a deliberately lossy
+    /// four-value map, not this crate's own richer error variants.
+    RemoteDenied(u16),
 }
 
 enum KeyMaterial {

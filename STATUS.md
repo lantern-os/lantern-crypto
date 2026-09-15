@@ -122,6 +122,13 @@ newly-characterized `lantern-kernel` scheduling bug, not anything here — see
     same day (2026-09-13, see `lantern-kernel/STATUS.md`), not a flaw in this crate's wire
     dispatch. Now 4/4 reproducible `Signal'd SUCCESS` — full ENCRYPT/DECRYPT round trip
     through the confined service over a real shared `Frame`.
+- **`KeystoreError` gained two new variants for `Channel`-based callers (2026-09-15)** —
+  `Channel(lantern_abi::frame::ChannelError)` and `RemoteDenied(u16)`, mirroring
+  `lantern_filesystem::StoreError::Channel`/`RemoteCryptoDenied`'s existing split (built for
+  its own `cipher::ChannelCipher`). First consumer: `lantern-runtime`'s new `IpcKeystore`
+  (`lantern-runtime/STATUS.md`) — a real `KeystoreService` impl reaching a confined
+  `keystore-service` over `lantern_abi::frame::Channel`, using this crate's own `wire`
+  client-side codecs. 44 tests green, `--no-default-features` too.
 
 ## Next
 - ~~A real clock source for `Caveat::ExpiresAt` — `lantern-hal` has none yet.~~ Resolved —
