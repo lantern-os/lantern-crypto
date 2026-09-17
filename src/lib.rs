@@ -84,6 +84,35 @@ const MAX_SEALS: usize = 16;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct KeyId(u16);
 
+impl KeyId {
+    /// Constructs a `KeyId` from a raw index without going through
+    /// [`Keystore::generate_aead_key`]/`generate_signing_key`/`generate_mac_key`.
+    ///
+    /// **Only for a caller with no real `Keystore` to mint one from** — namely
+    /// `lantern-runtime`'s `IpcKeystore`-backed `HostCapability` construction
+    /// (RFC-0018 Part 2): a confined runtime process holds a badged `Channel`
+    /// endpoint, not a `Keystore`, and `IpcKeystore`'s own `encrypt`/`decrypt`/
+    /// `sign` never consult the `key: KeyId` a `HostCapability` carries at all —
+    /// RFC-0019's wire protocol identifies the key purely by the kernel-delivered
+    /// badge on the far end, "the badge alone identifies `(KeyId, KeyOps)`". This
+    /// value is decorative bookkeeping for that backend, not a real key-pool
+    /// index.
+    ///
+    /// **Always panic-safe, meaningful only against the `Keystore` that actually
+    /// assigned it.** `id` is never used as a raw array index without a bounds
+    /// check (`Keystore::key_record` uses `.get()`), and every operation method
+    /// (`encrypt`/`decrypt`/`sign`) checks `badge`'s own granted key against this
+    /// value by equality (`check_access`) before ever touching key material — an
+    /// arbitrary `id` passed to a real `Keystore` just fails gracefully
+    /// (`WrongKey`/`NoSuchKey`), the same as any other capability check this
+    /// crate makes. Still: don't use this to fabricate a `KeyId` you then hand to
+    /// a real, in-process `Keystore` expecting it to resolve to a specific key —
+    /// there is no key there to find.
+    pub const fn from_raw(id: u16) -> Self {
+        Self(id)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum KeyPurpose {
     Aead,
@@ -880,5 +909,28 @@ mod tests {
         f.keystore.destroy(key_a).unwrap();
         let key_b = f.keystore.generate_aead_key([2u8; aead::AEAD_KEY_LEN]).unwrap();
         assert_ne!(key_a, key_b, "a destroyed slot must never be handed to a new, unrelated key");
+    }
+
+    #[test]
+    fn a_fabricated_key_id_never_panics_against_a_real_keystore() {
+        // KeyId::from_raw's whole point (its own doc has the full story) is that a value
+        // not obtained from generate_*_key is always safe to pass around -- this is the
+        // actual panic-safety claim that doc makes, verified against a real, real-grant
+        // Keystore (grant_access -- the same Broker-mediated flow every other test here
+        // uses, not a poked-in fixture).
+        let mut f = setup();
+        let real_key = f.keystore.generate_aead_key([9u8; aead::AEAD_KEY_LEN]).unwrap();
+        let badge = grant_access(&mut f, real_key, KeyOps::ENCRYPT);
+
+        // In range but not the granted key: a clean WrongKey, not a panic.
+        let wrong_key = KeyId::from_raw(if real_key.0 == 0 { 1 } else { 0 });
+        assert_eq!(
+            f.keystore.encrypt(badge, wrong_key, &[0u8; aead::NONCE_LEN], b"", &mut [0u8; 4]),
+            Err(KeystoreError::WrongKey)
+        );
+
+        // Out of MAX_KEYS range entirely: still a clean error, not an out-of-bounds panic.
+        let out_of_range = KeyId::from_raw(u16::MAX);
+        assert!(f.keystore.encrypt(badge, out_of_range, &[0u8; aead::NONCE_LEN], b"", &mut [0u8; 4]).is_err());
     }
 }

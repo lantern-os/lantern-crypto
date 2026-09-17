@@ -129,6 +129,19 @@ newly-characterized `lantern-kernel` scheduling bug, not anything here — see
   (`lantern-runtime/STATUS.md`) — a real `KeystoreService` impl reaching a confined
   `keystore-service` over `lantern_abi::frame::Channel`, using this crate's own `wire`
   client-side codecs. 44 tests green, `--no-default-features` too.
+- **`KeyId::from_raw` — a public escape-hatch constructor (2026-09-17)** — for a caller
+  with no real `Keystore` to mint one from (a confined runtime process holding an
+  `IpcKeystore`'s badged `Channel`, not a `Keystore` — `lantern-runtime`'s
+  `HostCapability::keystore_key` needs a `KeyId` to construct a resource-scoped grant, but
+  `IpcKeystore` never actually consults it: RFC-0019's wire protocol identifies the key
+  purely by the kernel-delivered badge). Checked before adding it, not assumed: `KeyId`'s
+  field privacy was never a safety-critical invariant in the first place —
+  `Keystore::key_record` already bounds-checks (`.get()`, not a raw index) and
+  `check_access` compares the caller-supplied `key` against the real grant by equality
+  before any key material is touched, so a fabricated `KeyId` was always panic-safe against
+  a real `Keystore`, just meaningless without one. New test verifies this directly (a
+  fabricated in-range-but-wrong `KeyId` and an out-of-`MAX_KEYS`-range one both fail
+  gracefully against a real, `grant_access`-granted `Keystore`, no panic). 45 tests green.
 
 ## Next
 - ~~A real clock source for `Caveat::ExpiresAt` — `lantern-hal` has none yet.~~ Resolved —
