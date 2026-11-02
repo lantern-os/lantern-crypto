@@ -143,6 +143,9 @@ newly-characterized `lantern-kernel` scheduling bug, not anything here — see
   fabricated in-range-but-wrong `KeyId` and an out-of-`MAX_KEYS`-range one both fail
   gracefully against a real, `grant_access`-granted `Keystore`, no panic). 45 tests green.
 
+- **`KeyOps::bits` / `from_bits` (2026-11-02):** what [RFC-0020](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0020-launch-binder.md)'s
+  `GRANT` carries. `from_bits` refuses unknown bits.
+
 ## Next
 - ~~A real clock source for `Caveat::ExpiresAt` — `lantern-hal` has none yet.~~ Resolved —
   [RFC-0012](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0012-monotonic-clock-primitive.md)/[ADR-0016](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0016-monotonic-clock-primitive.md)
