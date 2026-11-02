@@ -142,6 +142,22 @@ impl KeyOps {
     /// (see [`crate::hash`]'s doc), so there's no ungated-verify split here.
     pub const MAC: KeyOps = KeyOps(1 << 3);
 
+    /// These ops as the bits [RFC-0020](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0020-launch-binder.md)'s
+    /// `GRANT` carries.
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// The inverse of [`KeyOps::bits`]: `None` for an unknown bit.
+    pub const fn from_bits(bits: u8) -> Option<KeyOps> {
+        let known = KeyOps::ENCRYPT.0 | KeyOps::DECRYPT.0 | KeyOps::SIGN.0 | KeyOps::MAC.0;
+        if bits & !known == 0 {
+            Some(KeyOps(bits))
+        } else {
+            None
+        }
+    }
+
     pub const fn union(self, other: KeyOps) -> KeyOps {
         KeyOps(self.0 | other.0)
     }
@@ -640,6 +656,13 @@ mod tests {
     use lantern_kernel::state::KernelState;
     use lantern_hal::{MessageTag, TrapFrame};
     use lantern_kernel::ipc;
+
+    #[test]
+    fn ops_bits_round_trip_and_unknown_bits_are_refused() {
+        let ops = KeyOps::ENCRYPT.union(KeyOps::SIGN);
+        assert_eq!(KeyOps::from_bits(ops.bits()).map(KeyOps::bits), Some(ops.bits()));
+        assert!(KeyOps::from_bits(0x80).is_none());
+    }
 
     /// Same two-party shape as `lantern-capabilities`'s own `Broker` tests:
     /// a service thread (its own CSpace: a self-CNode cap at slot 0, a shared
