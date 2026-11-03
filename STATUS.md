@@ -145,6 +145,9 @@ newly-characterized `lantern-kernel` scheduling bug, not anything here — see
 
 - **`KeyOps::bits` / `from_bits` (2026-11-02):** what [RFC-0020](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0020-launch-binder.md)'s
   `GRANT` carries. `from_bits` refuses unknown bits.
+- **`Keystore::is_revoked` (2026-11-02):** for a service loop deciding whether to send another reply
+  chunk ([RFC-0021](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0021-grant-ledger-and-revocation.md)). `keystore-service` now reaches
+  `revoke_access` over `REVOKE`, from the launch binder.
 
 ## Next
 - ~~A real clock source for `Caveat::ExpiresAt` — `lantern-hal` has none yet.~~ Resolved —

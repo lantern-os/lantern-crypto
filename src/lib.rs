@@ -439,6 +439,12 @@ impl Keystore {
         self.broker.revoke(badge).map_err(KeystoreError::Kernel)
     }
 
+    /// Whether `badge` is refused outright: revoked, or never minted here. For a service
+    /// loop deciding whether to send another reply chunk (RFC-0021).
+    pub fn is_revoked(&self, badge: u64) -> bool {
+        self.broker.is_revoked(badge)
+    }
+
     /// **Deny by default.** Checks, in order: the badge isn't revoked
     /// (delegating to [`lantern_capabilities::Broker::is_revoked`], itself
     /// deny-by-default for a badge this keystore never minted), the badge
