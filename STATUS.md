@@ -149,6 +149,9 @@ newly-characterized `lantern-kernel` scheduling bug, not anything here — see
   chunk ([RFC-0021](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0021-grant-ledger-and-revocation.md)). `keystore-service` now reaches
   `revoke_access` over `REVOKE`, from the launch binder.
 
+- **`KeyId::raw` (2026-11-10):** the inverse of `from_raw`, which is what the audit log records as an operation's `object`
+  ([RFC-0025](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0025-audit-log-service-operations.md)/[ADR-0030](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0030-audit-log-service-operations.md)). The confined service records each use of a grant before running it; this crate's own API is unchanged.
+
 ## Next
 - ~~A real clock source for `Caveat::ExpiresAt` — `lantern-hal` has none yet.~~ Resolved —
   [RFC-0012](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0012-monotonic-clock-primitive.md)/[ADR-0016](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0016-monotonic-clock-primitive.md)
