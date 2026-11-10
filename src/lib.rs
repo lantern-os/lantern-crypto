@@ -111,6 +111,13 @@ impl KeyId {
     pub const fn from_raw(id: u16) -> Self {
         Self(id)
     }
+
+    /// The raw value, the inverse of [`KeyId::from_raw`]: what the audit log records as a grant's or an
+    /// operation's `object` ([RFC-0025](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0025-audit-log-service-operations.md)).
+    /// Naming an object this way conveys no access to it.
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

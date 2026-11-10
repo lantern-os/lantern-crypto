@@ -20,6 +20,7 @@ holds the system's most sensitive asset — user keys — so it is high in the a
 | X5 | Algorithm obsolescence / "harvest now, decrypt later" | Crypto-agility (versioned/tagged) + hybrid PQC for long-lived secrets. |
 | X6 | Side-channel key leakage | Constant-time code; no secret-dependent branching; zeroisation. |
 | X7 | Attestation used to fingerprint/track | Mediate who can request attestation; minimise linkable detail. |
+| X8 | The audit log is unavailable, full of one grant's records, or refuses | An audited `keystore-service` doesn't run an operation it can't record, and answers `FAILED` ([ADR-0030](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0030-audit-log-service-operations.md)). That makes the policy store a dependency of every operation, by design: failing closed. |
 
 ## Non-goals
 - Defeating a fully malicious enclave/hardware root of trust (system non-goal).
