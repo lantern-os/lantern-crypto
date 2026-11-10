@@ -184,8 +184,8 @@ newly-characterized `lantern-kernel` scheduling bug, not anything here — see
   (`lantern-kernel/STATUS.md`'s "Known Phase 1 gaps"); the demo now completes 4/4
   reproducible.
 - Hardware enclave story ([`lantern-hal`](https://github.com/lantern-os/lantern-hal), [`lantern-boot`](https://github.com/lantern-os/lantern-boot))
-  — a Phase 4 concern (hardware-backed key custody), not blocking this software-only keystore
-  prototype.
+  — Phase 4 (hardware-backed key custody), not blocking this software-only keystore prototype. Settled
+  by [RFC-0023](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0023-hardware-key-custody-in-phase-4.md), whose checklist tracks it.
 - ~~A first keystore prototype behind capabilities also needs `lantern-capabilities`'s
   brokering work.~~ Resolved — `Broker` is real and proven (`lantern-capabilities/STATUS.md`),
   and this crate now builds on it.
