@@ -410,7 +410,13 @@ impl Keystore {
             return Err(KeystoreError::WrongPurpose);
         }
 
-        let slot = self.grants.iter().position(Option::is_none).ok_or(KeystoreError::NotEnoughCapacity)?;
+        // A free record, or else one whose badge is revoked: see `Broker::mint`, which forgets the same way.
+        let slot = self
+            .grants
+            .iter()
+            .position(Option::is_none)
+            .or_else(|| self.grants.iter().position(|g| g.is_some_and(|g| self.broker.is_revoked(g.badge))))
+            .ok_or(KeystoreError::NotEnoughCapacity)?;
         let badge = self.broker
             .mint(
                 backend,
@@ -893,6 +899,34 @@ mod tests {
             f.keystore.encrypt(badge, key, &[0; aead::NONCE_LEN], b"", &mut buf),
             Err(KeystoreError::BadgeRevoked)
         );
+    }
+
+    #[test]
+    fn a_full_keystore_reuses_only_a_revoked_grant() {
+        let mut f = setup();
+        let key = f.keystore.generate_aead_key([1u8; aead::AEAD_KEY_LEN]).unwrap();
+        let cnode = f.state.tcbs.get(f.keystore_tcb.0 as usize).unwrap().cspace.unwrap();
+        f.state.scheduler.current = Some(f.keystore_tcb);
+        let grant = |f: &mut Fixture| {
+            let badge = f.keystore.request_key_access(
+                &mut KernelBackend::new(&mut f.state, f.keystore_tcb),
+                key,
+                KeyOps::ENCRYPT,
+                SOURCE_SLOT,
+                SCRATCH_SLOT,
+            );
+            *f.state.cnodes.get_mut(cnode.0 as usize).unwrap().slot_mut(SCRATCH_SLOT).unwrap() = Capability::Null;
+            badge
+        };
+        let badges: Vec<u64> = (0..MAX_GRANTS).map(|_| grant(&mut f).unwrap()).collect();
+        assert_eq!(grant(&mut f), Err(KeystoreError::NotEnoughCapacity));
+        f.keystore.revoke_access(badges[0]).unwrap();
+        let fresh = grant(&mut f).unwrap();
+        assert!(!badges.contains(&fresh));
+        let mut buf = [0u8; 4];
+        assert_eq!(f.keystore.encrypt(badges[0], key, &[0; aead::NONCE_LEN], b"", &mut buf), Err(KeystoreError::BadgeRevoked));
+        assert!(f.keystore.encrypt(fresh, key, &[0; aead::NONCE_LEN], b"", &mut buf).is_ok());
+        assert!(f.keystore.encrypt(badges[1], key, &[0; aead::NONCE_LEN], b"", &mut buf).is_ok());
     }
 
     #[test]
