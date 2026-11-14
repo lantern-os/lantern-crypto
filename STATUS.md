@@ -152,6 +152,9 @@ newly-characterized `lantern-kernel` scheduling bug, not anything here — see
 - **`KeyId::raw` (2026-11-10):** the inverse of `from_raw`, which is what the audit log records as an operation's `object`
   ([RFC-0025](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0025-audit-log-service-operations.md)/[ADR-0030](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0030-audit-log-service-operations.md)). The confined service records each use of a grant before running it; this crate's own API is unchanged.
 
+- **Grant records are reused once revoked (2026-11-14, [RFC-0029](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0029-a-confined-launcher.md)/[ADR-0035](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0035-a-confined-launcher.md)).** When every record is taken, `Keystore::request_key_access` reuses a revoked
+  badge's. That's safe: a badge is never minted twice, and one no longer remembered reads as revoked. Without it, the
+  interactive system's services would refuse every grant after about 30 app runs. Tested.
 ## Next
 - ~~A real clock source for `Caveat::ExpiresAt` — `lantern-hal` has none yet.~~ Resolved —
   [RFC-0012](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0012-monotonic-clock-primitive.md)/[ADR-0016](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0016-monotonic-clock-primitive.md)
