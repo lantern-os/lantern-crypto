@@ -32,6 +32,13 @@ impl Hash {
         &self.0
     }
 
+    /// A hash read back from somewhere it was stored, such as the store's sealed image on disk
+    /// ([RFC-0031](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0031-storage-a-block-driver-and-the-store-on-disk.md)). Nothing here checks it
+    /// names anything: whoever stored it must have authenticated it.
+    pub const fn from_bytes(bytes: [u8; HASH_LEN]) -> Self {
+        Self(bytes)
+    }
+
     /// Constant-time equality (`subtle::ConstantTimeEq`) — see
     /// [`MacKey::verify`]'s doc for why a MAC comparison must never
     /// short-circuit.
