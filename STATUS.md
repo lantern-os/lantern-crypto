@@ -155,6 +155,8 @@ newly-characterized `lantern-kernel` scheduling bug, not anything here — see
 - **Grant records are reused once revoked (2026-11-14, [RFC-0029](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0029-a-confined-launcher.md)/[ADR-0035](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0035-a-confined-launcher.md)).** When every record is taken, `Keystore::request_key_access` reuses a revoked
   badge's. That's safe: a badge is never minted twice, and one no longer remembered reads as revoked. Without it, the
   interactive system's services would refuse every grant after about 30 app runs. Tested.
+- **`hash::Hash::from_bytes` (2026-11-14, [RFC-0031](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0031-storage-a-block-driver-and-the-store-on-disk.md)/[ADR-0036](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0036-storage-a-block-driver-and-the-store-on-disk.md))**, for a hash read back from the store's sealed image, which
+  authenticates it.
 ## Next
 - ~~A real clock source for `Caveat::ExpiresAt` — `lantern-hal` has none yet.~~ Resolved —
   [RFC-0012](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0012-monotonic-clock-primitive.md)/[ADR-0016](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0016-monotonic-clock-primitive.md)
