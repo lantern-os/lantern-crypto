@@ -12,6 +12,8 @@ ENCRYPT/DECRYPT over `Channel`) is fully implemented and unit-tested (this crate
 newly-characterized `lantern-kernel` scheduling bug, not anything here — see
 `lantern-kernel/STATUS.md`'s "Known Phase 1 gaps" and `lantern-boot/STATUS.md`.
 
+**Roadmap:** Phase 3 closed and Phase 4 (hardware and assurance) opened, 2026-11-16, per [RFC-0036](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0036-phase-3-to-phase-4-transition.md)/[ADR-0041](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0041-phase-3-complete-phase-4-opened.md).
+
 ## Done
 - Service surface and initial primitive set drafted and reviewed ([ARCHITECTURE.md](./ARCHITECTURE.md)).
 - Crypto-agility + PQC-readiness stance set.

@@ -8,7 +8,9 @@ build on. Applications get *capabilities to operations*, never raw keys.
 - **Layer:** system service (confined user space; key custody ideally hardware-backed).
 - **System context:** [wiki/Cryptography](https://github.com/lantern-os/lantern-docs/blob/main/wiki/Cryptography.md).
 
-> **Phase 2 complete** (RFC-0017/ADR-0021), roadmap gate now Phase 3. The `Keystore` prototype (primitive *choices* RFC-governed) is real; making it a confined IPC service is Phase 3's first work. See [`STATUS.md`](./STATUS.md).
+> **Phase 4** ([RFC-0036](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0036-phase-3-to-phase-4-transition.md)): hardware and assurance. The keystore runs as a confined service; Noise sessions and pairwise identities serve the
+> wallet. Its keys are software-held demo keys until Phase 4's hardware root of trust
+> ([RFC-0023](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0023-hardware-key-custody-in-phase-4.md)). See [`STATUS.md`](./STATUS.md).
 
 ## In this repo
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md), [`THREAT_MODEL.md`](./THREAT_MODEL.md), [`STATUS.md`](./STATUS.md).
