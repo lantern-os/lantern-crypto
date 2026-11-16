@@ -62,6 +62,8 @@
 
 pub mod aead;
 pub mod hash;
+pub mod noise;
+pub mod pairwise;
 #[cfg(feature = "kernel-backend")]
 pub mod sealed;
 pub mod signing;

@@ -157,6 +157,11 @@ newly-characterized `lantern-kernel` scheduling bug, not anything here — see
   interactive system's services would refuse every grant after about 30 app runs. Tested.
 - **`hash::Hash::from_bytes` (2026-11-14, [RFC-0031](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0031-storage-a-block-driver-and-the-store-on-disk.md)/[ADR-0036](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0036-storage-a-block-driver-and-the-store-on-disk.md))**, for a hash read back from the store's sealed image, which
   authenticates it.
+- **Noise and pairwise identities (2026-11-16, [RFC-0035](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0035-pairwise-network-identities.md)/[ADR-0040](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0040-pairwise-network-identities.md)).** `noise`: `Noise_XX_25519_ChaChaPoly_BLAKE2s`'s state machine,
+  allocating nothing, over reviewed X25519 (`x25519-dalek`), ChaCha20-Poly1305 and BLAKE2s/HMAC crates; host-tested
+  byte for byte against `snow` with fixed keys, for interoperability in both roles, against tampering, out-of-turn
+  messages and a low-order ephemeral. `pairwise`: an identity's secret as keyed BLAKE3 of a root over the app's principal
+  and the peer's name. 52 tests.
 ## Next
 - ~~A real clock source for `Caveat::ExpiresAt` — `lantern-hal` has none yet.~~ Resolved —
   [RFC-0012](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0012-monotonic-clock-primitive.md)/[ADR-0016](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0016-monotonic-clock-primitive.md)

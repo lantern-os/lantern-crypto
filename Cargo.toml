@@ -33,3 +33,12 @@ zeroize = { version = "1", default-features = false, features = ["derive"] }
 # dependency via chacha20poly1305/ed25519-dalek; depended on directly rather
 # than hand-rolling a constant-time compare.
 subtle = { version = "2", default-features = false }
+# RFC-0035's Noise channel (`noise`): X25519, BLAKE2s and its HMAC, all reviewed crates; only the Noise state machine is
+# this crate's own.
+x25519-dalek = { version = "2", default-features = false, features = ["static_secrets"] }
+blake2 = { version = "0.10", default-features = false }
+hmac = { version = "0.12", default-features = false }
+
+[dev-dependencies]
+# An independent Noise implementation, to check `noise` against (host tests only).
+snow = "0.9"
